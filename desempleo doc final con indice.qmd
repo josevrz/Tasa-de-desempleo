@@ -1,0 +1,1443 @@
+---
+title: "Tasa de desempleo ecuatoriana Noviembre 2022 - Septiembre 2025"
+author: "José Vinueza"
+format: 
+  html:
+    toc: true        # activa el índice
+    toc-location: left   # opcional: índice flotante a la izquierda
+    toc-depth: 3     # opcional: niveles de encabezados que se muestran
+editor: visual
+---
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+options(scipen=9999)
+            
+library(httr)
+library(tabulapdf)
+library(dplyr)
+library(tidyr)
+library(janitor)
+library(stringr)
+library(knitr)
+library(lubridate)
+library(tidyverse)
+library(xlsx)
+library(haven)
+library(readr)
+library(lubridate)
+library(readxl)
+library(stringr)
+library(htmlwidgets)
+library(pdftools)
+library(data.table)
+
+library(prophet)
+library(tseries)
+library(forecast)
+library(stargazer)
+library(lmtest)
+library(TTR)
+library(dygraphs)
+library(patchwork)
+
+
+
+
+```
+
+## 1. Descarga de informes mensuales del BCE, compilación y limpieza de los datos
+
+```{r}
+#| include: false
+
+ #| message: false
+#| warning: false
+ 
+procesar_pdf_bce <- function(anios_meses) {
+  resultados <- list()
+  
+  for (codigo in anios_meses) {
+    url_pdf <- paste0("https://contenido.bce.fin.ec/documentos/Estadisticas/SectorReal/Previsiones/IndCoyuntura/CifrasEconomicas/", codigo, ".pdf")
+    destfile <- paste0(codigo, ".pdf")
+    
+    # Verificar si el archivo existe en el servidor
+    respuesta <- httr::HEAD(url_pdf)
+    
+    if (respuesta$status_code == 200) {
+      tryCatch({
+        httr::GET(url_pdf, httr::write_disk(destfile, overwrite = TRUE))
+        tablas <- tabulapdf::extract_tables(destfile)
+        df <- as.data.frame(tablas[[1]])
+        
+        obs <- nrow(df)
+        z <- obs - 9
+        
+        df0 <- df %>% slice(z) %>% select(1:3)
+        names(df0) <- c("sector", "valor1", "valor2")
+        
+        limi <- z + 1
+        lims <- z + 3
+        
+        df2 <- df %>% slice(limi:lims) %>% select(2:3)
+        df2 <- df2 %>% separate(`Sector Monetario y Financiero`, into = c("sector", "valor1"), sep = " ")
+        names(df2)[3] <- "valor2"
+        
+        df2 <- rbind(df0, df2)
+        df2 <- row_to_names(df2, row_number = 1)
+        names(df2)[1] <- "tasa_desempleo"
+        
+        df_largo <- df2 %>% pivot_longer(cols = -tasa_desempleo, names_to = "Mes", values_to = "Tasa")
+        df_largo$Periodo <- codigo
+        
+        df_ancho <- df_largo %>% pivot_wider(names_from = tasa_desempleo, values_from = Tasa)
+        
+        resultados[[codigo]] <- df_ancho
+      }, error = function(e) {
+        message(paste("Error procesando:", codigo))
+      })
+    } else {
+      message(paste("Archivo no disponible:", codigo))
+    }
+  }
+  
+  final <- bind_rows(resultados)
+  return(final)
+}
+
+
+
+
+fechas <- seq(as.Date("2023-01-01"), as.Date("2025-01-01"), by = "month")
+codigos <- format(fechas, "%Y%m")
+nombres_archivos <- paste0("cie", codigos)
+
+df_desempleo <- procesar_pdf_bce(nombres_archivos)
+
+
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+procesar_pdf_bce_nuevo <- function(anios_meses) {
+  resultados <- list()
+  
+  for (codigo in anios_meses) {
+    url_pdf <- paste0("https://contenido.bce.fin.ec/documentos/Estadisticas/SectorReal/Previsiones/IndCoyuntura/CifrasEconomicas/", codigo, ".pdf")
+    destfile <- paste0(codigo, ".pdf")
+    
+    # Verificar si el archivo existe
+    respuesta <- httr::HEAD(url_pdf)
+    
+    if (respuesta$status_code == 200) {
+      tryCatch({
+        httr::GET(url_pdf, httr::write_disk(destfile, overwrite = TRUE))
+        tablas <- tabulapdf::extract_tables(destfile)
+        df <- as.data.frame(tablas[[1]])
+        
+        obs <- nrow(df)
+        z <- obs - 9
+        
+        df0 <- df %>% slice(z) %>% select(-c(3,5,6,7,8))
+        names(df0)[1] <- "sector"
+        names(df0)[2] <- "valor"
+        
+        limi <- z + 1
+        lims <- z + 3
+        
+        df2 <- df %>% slice(limi:lims) %>% select(-c(1,3,5,6,7,8))
+        df2 <- df2 %>% separate(`Sector Monetario y Financiero`, into = c("sector", "valor"), sep = " ")
+        
+        df2 <- rbind(df0, df2)
+        df2 <- row_to_names(df2, row_number = 1)
+        names(df2)[1] <- "tasa_desempleo"
+        
+        df_largo <- df2 %>% pivot_longer(cols = -tasa_desempleo, names_to = "Mes", values_to = "Tasa")
+        df_largo$Periodo <- codigo
+        
+        df_ancho <- df_largo %>% pivot_wider(names_from = tasa_desempleo, values_from = Tasa)
+        
+        resultados[[codigo]] <- df_ancho
+      }, error = function(e) {
+        message(paste("Error procesando:", codigo))
+      })
+    } else {
+      message(paste("Archivo no disponible:", codigo))
+    }
+  }
+  
+  final <- bind_rows(resultados)
+  return(final)
+}
+
+fechas_nuevas <- seq(as.Date("2025-02-01"), as.Date("2025-09-01"), by = "month")
+codigos_nuevos <- paste0("cie", format(fechas_nuevas, "%Y%m"))
+df_desempleo_nuevo <- procesar_pdf_bce_nuevo(codigos_nuevos)
+
+
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+
+
+
+url_pdf <- "https://contenido.bce.fin.ec/documentos/Estadisticas/SectorReal/Previsiones/IndCoyuntura/CifrasEconomicas/cie202306.pdf"
+destfile <- "cie202306.pdf"
+httr::GET(url_pdf, httr::write_disk(destfile, overwrite = TRUE))
+
+tablas <- tabulapdf::extract_tables(destfile)
+
+
+
+df<-as.data.frame(tablas[[1]])
+
+
+
+#dim(df)
+
+y<-dim(df)
+
+obs<-y[[1]]
+
+z=obs-4
+
+
+df0<-df%>%
+  slice(z)
+
+df0<- df0[, -c(4,5,6)]
+
+names(df0)[1]="sector"
+names(df0)[2]="valor1"
+names(df0)[3]="valor2"
+
+limi=z+1
+lims=z+3
+
+df2<-df%>%
+  slice(limi:lims)
+
+df2<- df2[, -c(4,5,6)]
+
+
+names(df2)[1]="sector"
+
+names(df2)[2]="valor1"
+
+names(df2)[3]="valor2"
+
+df2<-df0%>%
+  rbind(df2)
+
+df2 <- row_to_names(df2, row_number = 1)
+
+names(df2)[1]="tasa_desempleo"
+
+
+df_largo <- df2 %>%
+  pivot_longer(cols = -tasa_desempleo, names_to = "Mes", values_to = "Tasa")
+
+
+df_ancho <- df_largo %>%
+  pivot_wider(names_from = tasa_desempleo, values_from = Tasa)
+
+
+dfe=df_ancho%>%
+  mutate(Periodo="cie202306")
+
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+
+url_pdf <- "https://contenido.bce.fin.ec/documentos/Estadisticas/SectorReal/Previsiones/IndCoyuntura/CifrasEconomicas/cie202312.pdf"
+destfile <- "cie202312.pdf"
+httr::GET(url_pdf, httr::write_disk(destfile, overwrite = TRUE))
+
+tablas <- tabulapdf::extract_tables(destfile)
+
+
+df<-as.data.frame(tablas[[1]])
+
+
+#dim(df)
+
+y<-dim(df)
+
+obs<-y[[1]]
+
+z=obs-7
+
+
+df0<-df%>%
+  slice(z)
+
+df0<- df0[, -c(4,5,6)]
+
+names(df0)[1]="sector"
+names(df0)[2]="valor1"
+names(df0)[3]="valor2"
+
+limi=z+1
+lims=z+3
+
+df2<-df%>%
+  slice(limi:lims)
+
+df2<- df2[, -c(4,5,6)]
+
+
+
+names(df2)[1]="sector"
+names(df2)[2]="valor1"
+names(df2)[3]="valor2"
+
+df2<-df0%>%
+  rbind(df2)
+
+df2 <- row_to_names(df2, row_number = 1)
+
+names(df2)[1]="tasa_desempleo"
+
+
+df_largo <- df2 %>%
+  pivot_longer(cols = -tasa_desempleo, names_to = "Mes", values_to = "Tasa")
+
+
+df_ancho <- df_largo %>%
+  pivot_wider(names_from = tasa_desempleo, values_from = Tasa)
+
+
+dfs=df_ancho%>%
+  mutate(Periodo="cie202312")
+
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+
+url_pdf <- "https://contenido.bce.fin.ec/documentos/Estadisticas/SectorReal/Previsiones/IndCoyuntura/CifrasEconomicas/cie202510.pdf"
+destfile <- "cie202510.pdf"
+httr::GET(url_pdf, httr::write_disk(destfile, overwrite = TRUE))
+
+tablas <- tabulapdf::extract_tables(destfile)
+
+
+df<-as.data.frame(tablas[[1]])
+
+
+
+dim(df)
+
+y<-dim(df)
+
+obs<-y[[1]]
+
+z=obs-9
+
+
+df0<-df%>%
+  slice(z)
+
+df0<- df0[, -c(4,5,6,7)]
+
+names(df0)[1]="sector"
+names(df0)[2]="valor"
+
+limi=z+1
+lims=z+3
+
+
+df2<-df%>%
+  slice(limi:lims)
+
+df2<- df2[, -c(1,4,5,6,7)]
+
+df2<-df2%>%
+  separate(`Sector Monetario y Financiero`,into=c("sector","valor"),sep=" ")
+
+df2<-df0%>%
+  rbind(df2)
+
+df2 <- row_to_names(df2, row_number = 1)
+
+names(df2)[1]="tasa_desempleo"
+
+
+df_largo <- df2 %>%
+  pivot_longer(cols = -tasa_desempleo, names_to = "Mes", values_to = "Tasa")
+
+
+df_ancho <- df_largo %>%
+  pivot_wider(names_from = tasa_desempleo, values_from = Tasa)
+
+
+dfg=df_ancho%>%
+  mutate(Periodo="cie202510")
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+
+df_desempleo_nuevo<-df_desempleo_nuevo%>%
+  filter(Periodo!="cie202504")
+
+
+com <- df_desempleo %>%
+  rbind(dfs,dfe,df_desempleo_nuevo,dfg)%>%
+  mutate(dup=duplicated(Mes))%>%
+  filter(dup=="FALSE")%>%
+  mutate(across(c(Nacional, Urbano, Rural), ~ str_replace_all(., "%", ""))) %>%
+  mutate(across(c(Nacional, Urbano, Rural), ~ str_replace_all(., ",", "."))) %>%
+  mutate(across(c(Nacional, Urbano, Rural), ~ as.numeric(.)))%>%
+  arrange(Periodo)%>%
+  select(Mes:Rural)
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+kable(com,format = "pipe", padding = 2,booktabs = TRUE,align = "c")
+
+```
+
+<div>
+
+En esta sección se presentan los datos obtenidos de los informes del Banco Central del Ecuador que se encuentran subidos en su portal en formato PDF, el propósito del presente reporte automatizado es descargar los informes, guardarlos para futuras consultas, extraer la tasa de desempleo de estos reportes, limpiar la data obtenida y trabajar con ellos de tal manera que este cuadro es el cumplimiento de esos pasos.
+
+Uno de los informes para mayor referencia se lo puede descargar en el siguiente link:
+
+<https://contenido.bce.fin.ec/documentos/Estadisticas/SectorReal/Previsiones/IndCoyuntura/CifrasEconomicas/cie202510.pdf>
+
+Si se desea consultar el código para este reporte y el análisis de los datos, lo puede encontrar en el siguiente link: <https://github.com/josevrz/Tasa-de-desempleo>
+
+</div>
+
+## 2. Gráfica de la tasa de desempleo ecuatoriano para el período noviembre 2022 a septiembre 2025
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+com<-com%>%
+  mutate(periododef=dmy(paste("01", Mes)))
+
+com <- com %>%
+  arrange(periododef) %>%
+  mutate(
+    incremento_urbano = Urbano - lag(Urbano),
+    incremento_rural = Rural - lag(Rural),
+    incremento_nacional = Nacional - lag(Nacional)
+  )
+
+com_largo <- com %>%
+  select(periododef, starts_with("incremento_")) %>%
+  pivot_longer(cols = starts_with("incremento_"),
+               names_to = "Sector",
+               values_to = "Incremento") %>%
+  mutate(Sector = case_when(
+    Sector == "incremento_urbano" ~ "Urbano",
+    Sector == "incremento_rural" ~ "Rural",
+    Sector == "incremento_nacional" ~ "Nacional"
+  ))
+
+extremos <- com_largo %>%
+  group_by(Sector) %>%
+  summarise(
+    max_incremento = max(Incremento, na.rm = TRUE),
+    max_mes = periododef[which.max(Incremento)],
+    min_incremento = min(Incremento, na.rm = TRUE),
+    min_mes = periododef[which.min(Incremento)]
+  )
+
+
+com <- com %>%
+  arrange(periododef) %>%
+  mutate(
+    incremento_urbano = Urbano - lag(Urbano),
+    incremento_rural = Rural - lag(Rural),
+    incremento_nacional = Nacional - lag(Nacional)
+  )
+
+com_largo <- com %>%
+  select(periododef, starts_with("incremento_")) %>%
+  pivot_longer(cols = starts_with("incremento_"),
+               names_to = "Sector",
+               values_to = "Incremento") %>%
+  mutate(Sector = case_when(
+    Sector == "incremento_urbano" ~ "Urbano",
+    Sector == "incremento_rural" ~ "Rural",
+    Sector == "incremento_nacional" ~ "Nacional"
+  ))
+
+flechas_max <- extremos %>%
+  select(Sector, max_incremento, max_mes) %>%
+  mutate(texto = paste0("↑ Máx: ", round(max_incremento, 2), "%\n", format(max_mes, "%b %Y")))
+
+flechas_min <- extremos %>%
+  select(Sector, min_incremento, min_mes) %>%
+  mutate(texto = paste0("↓ Mín: ", round(min_incremento, 2), "%\n", format(min_mes, "%b %Y")))
+
+
+# Extraer los dos últimos registros
+puntos_finales <- com %>%
+  slice_tail(n = 2) %>%
+  select(periododef, Nacional, Urbano, Rural) %>%
+  pivot_longer(cols = c(Nacional, Urbano, Rural),
+               names_to = "Sector",
+               values_to = "Tasa") %>%
+  arrange(Sector, periododef) %>%
+  group_by(Sector) %>%
+  mutate(
+    cambio = Tasa - lag(Tasa),
+    flecha = case_when(
+      cambio > 0 ~ "↑",
+      cambio < 0 ~ "↓",
+      TRUE ~ "→"
+    ),
+    etiqueta = paste0(flecha, " ", round(Tasa, 1), "%")
+  ) %>%
+  filter(row_number() == n())  # Solo el último punto por sector
+
+
+
+ggplot(data = com) +
+  # Líneas por sector
+  geom_line(aes(x = periododef, y = Nacional, color = "Nacional"), size = 1.2) +
+  geom_line(aes(x = periododef, y = Urbano, color = "Urbano"), size = 1.2) +
+  geom_line(aes(x = periododef, y = Rural, color = "Rural"), size = 1.2) +
+  
+  # Puntos finales
+  geom_point(data = puntos_finales,
+             aes(x = periododef, y = Tasa, color = Sector),
+             size = 3, shape = 21, fill = "white", stroke = 1.2) +
+  
+  # Etiquetas con flechas
+  geom_text(data = puntos_finales,
+            aes(x = periododef, y = Tasa, label = etiqueta, color = Sector),
+            hjust = -0.2, vjust = -0.5, size = 3.2, fontface = "bold") +
+  
+  # Líneas horizontales de referencia
+  geom_hline(yintercept = 14.4, color = "red", linetype = "dashed", size = 1) +
+  annotate("text", x = min(com$periododef), y = 14.6, label = "Crisis 1999: 14.4%", color = "red", hjust = 0, size = 4.0) +
+  
+  geom_hline(yintercept = 6.5, color = "black", linetype = "dashed", size = 0.5) +
+  annotate("text", x = min(com$periododef), y = 6.7, label = "Máximo histórico 2007–2025: 6,5% (dic 2009)", color = "black", hjust = 0, size = 2.8) +
+  
+  geom_hline(yintercept = 4.3, color = "darkblue", linetype = "dotted", size = 0.5) +
+  annotate("text", x = min(com$periododef), y = 4.5, label = "Promedio histórico 2007–2025: 4,3% (desv. est. 0,8%)", color = "darkblue", hjust = 0, size = 2.8) +
+  
+  geom_hline(yintercept = 2.7, color = "darkgreen", linetype = "dotted", size = 0.5) +
+  annotate("text", x = min(com$periododef), y = 2.9, label = "Mínimo histórico 2007–2025: 2,7% (dic 2024)", color = "darkgreen", hjust = 0, size = 2.8) +
+  
+  # Etiquetas y estilo
+  labs(
+    title = "Evolución mensual de la tasa de desempleo por sector (nov 2022– sept 2025)",
+    subtitle = "Comparación con referencias históricas (2007–2025) y crisis de 1999",
+    x = "MES",
+    y = "Tasa de desempleo (%)",
+    color = "Sector",
+    caption = "Fuente: Banco Central del Ecuador (BCE)"
+  ) +
+  
+  scale_x_date(expand = expansion(mult = c(0.01, 0.08))) +
+  coord_cartesian(clip = "off") +
+  
+  theme_minimal() +
+  theme(
+    plot.margin = margin(t = 10, r = 40, b = 10, l = 10),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    plot.caption = element_text(size = 8, hjust = 1),
+    legend.title = element_text(face = "bold"),
+    legend.position = "bottom"
+  )
+  
+
+
+
+
+
+```
+
+En el presente gráfico podemos observar que septiembre 2025 revela un comportamiento mixto en los sectores:
+
+1.  La tasa nacional descendió a 3.2%, consolidando una tendencia de mejora respecto a meses anteriores.
+
+2.  La tasa urbana también disminuyó, ubicándose en 4.1%, lo que sugiere una recuperación parcial del empleo formal.
+
+3.  En contraste, la tasa rural se incrementó levemente a 1.5%, posiblemente reflejando ajustes estacionales o fricciones en el empleo agrícola.
+
+Con respecto a la comparación con referentes históricos:
+
+| Referente histórico | Valor (%) | Observación |
+|------------------------|------------------------|------------------------|
+| Crisis 1999 | 14.4 | Muy por encima del nivel actual; no hay señales de crisis |
+| Máximo histórico | 6.5 (dic. 2009) | No se ha superado en ningún sector |
+| Promedio histórico | 4.3 (2007–2025) | La tasa nacional está **por debajo**, lo que indica estabilidad |
+| Mínimo histórico | 2.7 (dic. 2024) | La tasa nacional se mantiene cerca |
+
+La tasa nacional actual (3.2%) se ubica **por debajo del promedio histórico**, lo que sugiere que **no existe deterioro estructural ni coyuntural**. Este nivel es consistente con una economía que opera dentro de márgenes saludables de fricción laboral.
+
+Desde la teoría económica, el desempleo puede analizarse como una variable que refleja tanto ciclos económicos como estructuras de mercado laboral. Según John Maynard Keynes, el desempleo puede persistir incluso en equilibrio si la demanda agregada es insuficiente, lo que justifica la intervención estatal para estimular el empleo.
+
+En este caso, los niveles actuales no sugieren insuficiencia de demanda, sino una estabilidad estructural, donde las tasas se mantienen dentro de rangos esperables y no se observan presiones críticas.
+
+Si bien existen otras variables dentro del campo macroeconómico y social con las que realizar comparaciones con el desempleo como por ejemplo: **PIB** (Ley de Okun) , **Inflación** (Curva de Phillips), **Subempleo, pobreza, migración, criminalidad,** el propósito de este análisis es **univariado**, centrado exclusivamente en el comportamiento de la **tasa de desempleo** a lo largo del tiempo. Esto permite una lectura clara y directa de la evolución laboral sin introducir complejidades multivariadas que serán abordadas en futuros trabajos.
+
+## 3. Gráfico de incrementos y decrementos de la tasa de desempleo ecuatoriano
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+ggplot(com_largo, aes(x = periododef, y = Incremento)) +
+  geom_col(fill = "steelblue", width = 0.6) +
+  geom_hline(yintercept = 0, color = "gray40", linetype = "dashed") +
+  facet_wrap(~Sector, ncol = 1, scales = "free_y") +
+  
+  # Flechas y texto para máximos
+  geom_segment(data = flechas_max,
+               aes(x = max_mes, xend = max_mes,
+                   y = max_incremento - 0.5, yend = max_incremento),
+               arrow = arrow(length = unit(0.15, "inches")),
+               color = "firebrick", inherit.aes = FALSE) +
+  
+  geom_text(data = flechas_max,
+            aes(x = max_mes, y = max_incremento - 0.6, label = texto),
+            inherit.aes = FALSE, hjust = 0, size = 2.7, color = "firebrick") +
+  
+  # Flechas y texto para mínimos
+  geom_segment(data = flechas_min,
+               aes(x = min_mes, xend = min_mes,
+                   y = min_incremento + 0.5, yend = min_incremento),
+               arrow = arrow(length = unit(0.15, "inches")),
+               color = "darkgreen", inherit.aes = FALSE) +
+  
+  geom_text(data = flechas_min,
+            aes(x = min_mes, y = min_incremento + 0.6, label = texto),
+            inherit.aes = FALSE, hjust = 0, size = 2.7, color = "darkgreen") +
+  
+  labs(
+    title = "Incrementos mensuales de la tasa de desempleo por sector",
+    subtitle = "Con flechas y anotaciones de máximos y mínimos por periodo",
+    x = "Mes",
+    y = "Incremento (%)",
+    caption = "Fuente: Banco Central del Ecuador, INEC"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(face = "bold", size = 11),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    plot.caption = element_text(size = 8, hjust = 1)
+  )
+
+```
+
+El gráfico presenta la evolución de los cambios mensuales en la tasa de desempleo para los sectores nacional, urbano y rural, permitiendo identificar los momentos de mayor variación en la dinámica laboral entre noviembre de 2023 y septiembre de 2025.
+
+En el sector nacional, el mayor incremento se registró en enero de 2025, con un aumento de 1.13 puntos porcentuales, mientras que la mayor reducción ocurrió en diciembre de 2024, con una caída de 1.04 puntos. Este comportamiento refleja una fuerte oscilación en el cambio de año, posiblemente asociada a ajustes estacionales o administrativos.
+
+En el sector rural, el incremento más alto fue de 0.59 puntos en febrero de 2024, seguido por una disminución significativa de 0.82 puntos en marzo del mismo año, lo que sugiere una dinámica agrícola o de ocupación informal con alta sensibilidad estacional.
+
+En el sector urbano, se observa la mayor volatilidad: el incremento más pronunciado fue de 1.46 puntos en enero de 2025, y la reducción más fuerte también fue de 1.46 puntos en diciembre de 2024, lo que indica una reversión abrupta en la dinámica del empleo formal urbano.
+
+Estos valores extremos permiten identificar meses críticos en la evolución del desempleo, donde se concentran los mayores ajustes. La simetría entre diciembre 2024 y enero 2025 en los sectores nacional y urbano sugiere un efecto de transición anual, posiblemente vinculado a:
+
+-   Finalización y renovación de contratos públicos y privados.
+
+-   Cambios en políticas de empleo o presupuestos institucionales.
+
+-   Fricciones estacionales propias del mercado laboral ecuatoriano.
+
+-   El comportamiento rural, en cambio, muestra picos más suaves y desplazados, lo que es consistente con una estructura laboral menos formal y más dependiente de ciclos agrícolas.
+
+## 4. Componentes temporales de la tasa de desempleo ecuatoriano
+
+A partir de este punto se trabaja con la tasa nacional.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+timeserie1<-com%>%
+  select(Nacional)
+
+int2 <- ts(timeserie1, frequency = 12, start = c(2022, 11))
+
+#plot(int2)
+
+descomp<-decompose(int2)#,type="multiplicative" usar multiplicativo o aditivo da igual
+
+
+
+plot(descomp, col="blue", col.main="black")###decomposision de la serie de la tasa nacional
+
+```
+
+## 4.1 Tendencia de la tasa de desempleo
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+tend<-as.data.frame(descomp$trend)
+stac<-as.data.frame(descomp$seasonal)
+
+com<-com%>%
+  cbind(tend,stac)
+
+names(com)[10]="tendencia_tasa_nac"
+
+names(com)[11]="estacionalidad_tasa_nac"
+
+
+
+ggplot(data = com) +
+  geom_line(mapping = aes(x = periododef, y = Nacional), color = "blue") +
+  geom_line(mapping = aes(x = periododef, y = tendencia_tasa_nac), color = "red") +
+  xlab("MES") +
+  ylab("Tasa de desempleo Nacional") +
+  scale_color_manual(values = c("Tasa Nacional" = "blue", "Tendencia" = "red")) +
+  labs(title = "Tasa Nacional vs tendencia")+
+  theme_minimal()
+
+```
+
+El gráfico muestra la evolución de la tasa de desempleo nacional junto con su tendencia suavizada. Se observa que los valores fluctúan alrededor de un nivel medio sin una dirección persistente al alza o a la baja. Este comportamiento sugiere que la serie no presenta una tendencia marcada y que su dinámica es compatible con una serie estacionaria, donde las variaciones se mantienen acotadas y centradas en torno a un promedio estable.
+
+Para confirmar formalmente la estacionariedad, es apropiado aplicar pruebas como el test de Dickey-Fuller aumentado (ADF). Este contraste permite verificar si la serie contiene una raíz unitaria (indicativa de no estacionariedad) o si, por el contrario, las fluctuaciones se mantienen alrededor de un valor constante con varianza estable.
+
+Hipótesis nula (H0): la serie tiene raíz unitaria → no es estacionaria.
+
+Hipótesis alternativa (H1): la serie es estacionaria.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+adf.test(com$Nacional)
+
+```
+
+El test arrojó un valor p-value de 0.01 el cual es menor a 0,05 por lo que se rechaza la hipótesis nula, se concluye que la serie es estacionaria, lo que respalda la interpretación visual del gráfico.
+
+La idea de estacionariedad es central en la econometría de series de tiempo. Como señalaba **Clive Granger**, premio Nobel de Economía, las series económicas suelen mostrar fluctuaciones alrededor de un equilibrio de largo plazo, y la estacionariedad es condición necesaria para aplicar modelos predictivos robustos como ARIMA.
+
+## 4.2 Estacionalidad de la tasa de desempleo
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+td3 = as.Date(com$periododef) #para convertir una columna de un data frame en tipo fecha para lo cual se debe indicar el formato
+
+head(td3)
+
+
+cne = zoo(x=com$estacionalidad_tasa_nac,order.by =td3)
+
+dygraph(cne, "Estacionalidad tasa de desempleo")##una serie
+
+#####tas nacional
+#cne2 = zoo(x=com$Nacional,order.by =td3)
+
+#dygraph(cne2, "Tasa de desempleo Nov 2022-Jun 2025")##una serie
+```
+
+El gráfico de estacionalidad evidencia que los meses de febrero concentran los mayores picos de desempleo, mientras que en diciembre se registran los valores más bajos. Este patrón refleja un comportamiento recurrente en el mercado laboral ecuatoriano:
+
+En diciembre, la tasa de desempleo disminuye debido al aumento de la demanda laboral asociada a las festividades de fin de año, caracterizadas por contrataciones temporales en comercio, servicios y actividades vinculadas al consumo estacional.
+
+En febrero, una vez concluido el periodo festivo y finalizados muchos contratos temporales, el desempleo tiende a incrementarse, generando el pico estacional más alto del año.
+
+Este comportamiento es consistente con la teoría de las fluctuaciones estacionales en series de tiempo económicas, donde ciertos meses concentran variaciones recurrentes por factores institucionales y sociales. La dinámica diciembre–febrero puede interpretarse como un ciclo de contratación y desvinculación temporal, propio de economías con alta informalidad y fuerte dependencia del comercio estacional.
+
+Desde una perspectiva teórica, este patrón se relaciona con lo que Keynes denominaba la demanda efectiva: el empleo depende de la capacidad de la economía para sostener la demanda agregada. En diciembre, la demanda se expande por el consumo festivo; en febrero, se contrae, generando un ajuste en el empleo.
+
+## 5. Modelamiento de la tasa de desempleo
+
+## 5.1 Gráficos de autocorrelación (ACF) y autocorrelación Parcial (PACF)
+
+El **ACF** y el **PACF** se utilizan para analizar la dependencia temporal de una serie respecto a sus valores rezagados. El ACF muestra la **correlación global** entre los valores actuales y los de periodos anteriores, mientras que el PACF refleja la **correlación directa** con un rezago específico, eliminando la influencia de los rezagos intermedios.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+tdn <- ts(com$Nacional, frequency = 12, start = c(2022,11))
+
+par(mfrow=c(1, 2))
+
+acf(tdn)
+
+pacf(tdn)
+
+```
+
+Los gráficos de Autocorrelación (ACF) y Autocorrelación Parcial (PACF) permiten identificar la dependencia temporal de la serie y orientar la selección de modelos ARIMA:
+
+ACF: mide la correlación total entre los valores actuales y sus rezagos. En este caso, el rezago 1 es significativo, lo que indica la existencia de autocorrelación inmediata en la serie.
+
+PACF: mide la correlación directa entre los valores presentes y un rezago específico, eliminando la influencia de rezagos intermedios. Se observa que el rezago 4 es significativo y negativo, lo que sugiere que valores altos de la tasa de desempleo hace cuatro periodos tienden a asociarse con valores más bajos en el presente (y viceversa). La diferencia clave respecto a la ACF es que la PACF cancela las influencias indirectas, mostrando únicamente la relación neta.
+
+Dado que previamente se verificó la estacionariedad de la serie nacional, los resultados de la ACF y PACF orientan la construcción de modelos ARIMA:
+
+Se consideran los modelos ARIMA(4,0,0) y ARIMA(4,0,1), que incorporan la autocorrelación de corto plazo y el efecto del rezago 4.
+
+Se incluirá también un modelo Holt-Winters multiplicativo, adecuado para series con estacionalidad proporcional.
+
+Finalmente, se probará el modelo Prophet, desarrollado por Meta, que utiliza descomposición aditiva con componentes de tendencia, estacionalidad y efectos de calendario (https://facebook.github.io/prophet/docs/quick_start.html#r-apil).
+
+## 5.2 Modelos ARIMA vs Holt Winters (ETS) y Prophet
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+
+modelo_arima <- arima(tdn, order = c(4,0,1))
+modelo_ar4 <- arima(tdn, order = c(4,0,0))
+modelo_ets <- ets(tdn, model = "MMM")
+df_prophet <- data.frame(ds = seq(as.Date("2022-11-01"), by = "month", length.out = length(tdn)),
+                         y = as.numeric(tdn))
+modelo_prophet <- prophet(df_prophet, verbose = FALSE)
+pred_prophet <- predict(modelo_prophet, df_prophet)
+
+
+
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+ajuste_arima <- fitted(modelo_arima)
+ajuste_ar4 <- fitted(modelo_ar4)
+ajuste_ets <- fitted(modelo_ets)
+ajuste_prophet <- pred_prophet$yhat
+
+# Cortar al mínimo común
+min_len <- min(length(tdn), length(ajuste_arima), length(ajuste_ar4), length(ajuste_ets), length(ajuste_prophet))
+fechas <- seq(as.Date("2022-11-01"), by = "month", length.out = min_len)
+
+df_modelos <- data.frame(
+  Fecha = fechas,
+  Observado = tdn[1:min_len],
+  ARIMA = ajuste_arima[1:min_len],
+  AR4 = ajuste_ar4[1:min_len],
+  ETS = ajuste_ets[1:min_len],
+  Prophet = ajuste_prophet[1:min_len]
+)
+
+dfmodels<-df_modelos%>%
+  select(Fecha,Observado,ARIMA,AR4)
+
+library(tidyr)
+
+df_largo1 <- dfmodels %>%
+  pivot_longer(cols = c(ARIMA, AR4),
+               names_to = "Modelo",
+               values_to = "Ajustado")
+
+ggplot(df_largo1, aes(x = Fecha)) +
+  geom_line(aes(y = Observado), color = "black", size = 1.2) +
+  geom_line(aes(y = Ajustado, color = Modelo, linetype = Modelo), size = 1) +
+  labs(
+    title = "Comparación de ajuste de modelos",
+    subtitle = "Serie observada vs ARIMA y AR",
+    x = "Mes",
+    y = "Tasa de desempleo (%)",
+    color = "Modelo",
+    linetype = "Modelo",
+    caption = "Fuente: Elaboración propia con datos del BCE"
+  ) +
+  scale_color_manual(values = c("ARIMA" = "red","AR4" = "blue")) +
+  scale_linetype_manual(values = c("ARIMA" = "dashed", "AR4" = "dotted")) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    plot.caption = element_text(size = 8, hjust = 1)
+  )
+
+
+
+
+
+
+
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+dfmodels2<-df_modelos%>%
+  select(Fecha,Observado,ETS,Prophet)
+
+df_largo2 <- dfmodels2 %>%
+  pivot_longer(cols = c(ETS, Prophet),
+               names_to = "Modelo",
+               values_to = "Ajustado")
+
+ggplot(df_largo2, aes(x = Fecha)) +
+  geom_line(aes(y = Observado), color = "black", size = 1.2) +
+  geom_line(aes(y = Ajustado, color = Modelo, linetype = Modelo), size = 1) +
+  labs(
+    title = "Comparación de ajuste de modelos",
+    subtitle = "Serie observada vs ETS y Prophet",
+    x = "Mes",
+    y = "Tasa de desempleo (%)",
+    color = "Modelo",
+    linetype = "Modelo",
+    caption = "Fuente: Elaboración propia con datos del BCE"
+  ) +
+  scale_color_manual(values = c("ETS" = "forestgreen","Prophet" = "purple")) +
+  scale_linetype_manual(values = c("ETS" = "solid","Prophet" = "twodash")) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    plot.caption = element_text(size = 8, hjust = 1)
+  )
+
+
+
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+
+metricas <- function(modelo, nombre) {
+  residuos <- modelo$residuals
+  mae <- mean(abs(residuos))
+  rmse <- sqrt(mean(residuos^2))
+  data.frame(
+    Modelo = nombre,
+    AIC = round(AIC(modelo), 2),
+    BIC = round(BIC(modelo), 2),
+    MAE = round(mae, 4),
+    RMSE = round(rmse, 4)
+  )
+}
+
+
+
+# Holt-Winters (ETS)
+modelo_ets <- ets(tdn, model = "MMM")
+
+# Prophet requiere dataframe con columnas ds (fecha) y y (valor)
+library(prophet)
+df_prophet <- data.frame(ds = seq(as.Date("2022-11-01"), by = "month", length.out = length(tdn)),
+                         y = as.numeric(tdn))
+modelo_prophet <- prophet(df_prophet, verbose = FALSE)
+pred_prophet <- predict(modelo_prophet, df_prophet)
+
+
+# ETS
+res_ets <- modelo_ets$residuals
+mae_ets <- mean(abs(res_ets))
+rmse_ets <- sqrt(mean(res_ets^2))
+
+# Prophet
+res_prophet <- df_prophet$y - pred_prophet$yhat
+mae_prophet <- mean(abs(res_prophet))
+rmse_prophet <- sqrt(mean(res_prophet^2))
+
+tabla_comparativa <- rbind(
+  metricas(modelo_arima, "ARIMA(4,0,1)"),
+  metricas(modelo_ar4, "AR(4)"),
+  data.frame(Modelo = "ETS(M,M,M)",
+             AIC = NA,
+             BIC = NA,
+             MAE = round(mae_ets, 4),
+             RMSE = round(rmse_ets, 4)),
+  data.frame(Modelo = "Prophet",
+             AIC = NA,
+             BIC = NA,
+             MAE = round(mae_prophet, 4),
+             RMSE = round(rmse_prophet, 4))
+)
+
+
+
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+kable(tabla_comparativa,format = "pipe", padding = 2,booktabs = TRUE,align = "c")
+
+
+```
+
+```{r}
+#| eval: false
+#| message: false
+#| warning: false
+#| include: false
+
+# tdn <- ts(com$Nacional, frequency = 12, start = c(2022,11))
+# 
+# modelo_ets = ets(tdn, model ="MMM")
+# 
+# fechas <- seq(as.Date("2022-11-01"), by = "month", length.out = length(tdn))
+# 
+# df_plot <- data.frame(
+#   Fecha = fechas,
+#   Observado = as.numeric(tdn),
+#   Ajustado = as.numeric(modelo_ets$fitted)
+# )
+# 
+# ggplot(df_plot, aes(x = Fecha)) +
+#   geom_line(aes(y = Observado), color = "black", size = 1.2) +
+#   geom_line(aes(y = Ajustado), color = "red", size = 1.1, linetype = "dashed") +
+#   
+#   labs(
+#     title = "Tasa de desempleo nacional observada vs ajustada",
+#     subtitle = "Modelo ETS(M,M,M) aplicado a serie mensual desde noviembre 2022",
+#     x = "Mes",
+#     y = "Tasa de desempleo (%)",
+#     caption = "Fuente: Elaboración propia con datos del BCE"
+#   ) +
+#   
+#   theme_minimal() +
+#   theme(
+#     plot.title = element_text(face = "bold", size = 14),
+#     plot.subtitle = element_text(size = 11),
+#     axis.text.x = element_text(angle = 45, hjust = 1),
+#     plot.caption = element_text(size = 8, hjust = 1)
+#   )
+# 
+
+```
+
+Como se puede apreciar el modelo Holt Winters (ETS) tiene el mejor ajuste de la serie de tiempo ya que tiene el menor MAE y RMSE, lo que indica que sus errores son más pequeños y consistentes.
+
+Cabe destacar que Prophet tiene buen desempeño, pero no supera a ETS.
+
+# 6. Análisis de parámetros del modelo seleccionado (ETS)
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+etsmodel<-as.data.frame(modelo_ets$par)
+
+kable(etsmodel,format = "pipe", padding = 2,booktabs = TRUE,align = "c")
+
+
+
+
+```
+
+α (alpha): suavizamiento del nivel
+
+β (beta): suavizamiento de la tendencia
+
+γ (gamma): suavizamiento de la estacionalidad
+
+l: Nivel inicial (intercepto)
+
+b: Tendencia inicial (pendiente).
+
+Los valores s0 a s10 indican el efecto estacional relativo de cada mes (noviembre a octubre)
+
+-   α al ser un valor bajo indica que el modelo promedia los datos a lo largo de un período más prolongado, haciendo el pronóstico menos sensible a los cambios recientes.
+
+-   β al ser un valor bajo considera a la tendencia constante.
+
+-   γ indica una estacionalidad más estable y consistente a lo largo del tiempo.
+
+-   I representa el valor base de la serie de tiempo en el momento de inicio (justo antes del primer período). Es el valor de partida para el componente de nivel del pronóstico.
+
+-   b representa la pendiente de la serie en el momento de inicio. Indica la tasa de crecimiento o decrecimiento de la serie al principio del período de pronóstico.
+
+-   Los valores de s0 a s10 se verán de mejor manera en el siguiente gráfico.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+timeserie1<-com%>%
+  select(Nacional)
+
+int2 <- ts(timeserie1, frequency = 12, start = c(2022, 11))
+
+
+descomp<-decompose(int2)#,type="multiplicative" usar multiplicativo o aditivo da igual
+
+
+stac<-as.data.frame(descomp$seasonal)
+
+meses <- c("Nov", "Dic", "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct")
+
+mesesets<-c("Nov", "Dic", "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep")
+
+mesesets2<-as.data.frame(mesesets)
+
+meses2<-as.data.frame(meses)
+
+etsmodel<-as.data.frame(modelo_ets$par)####este poner como parametros del modelo ver si al imprimir en el documento se ve la etiqueta de index
+
+etsmodeldef<-etsmodel%>%
+  slice(6:16)%>%
+  cbind(mesesets2)%>%
+  select("mesesets","modelo_ets$par")
+
+names(etsmodeldef)[1]="meses"
+names(etsmodeldef)[2]="estacionalidad_ets"
+
+stacdef<-stac%>%
+  mutate(dup=duplicated(x))%>%
+  filter(dup=="FALSE")%>%
+  cbind(meses2)%>%
+  select(meses,x)%>%
+  left_join(etsmodeldef,by="meses")%>%
+  mutate(mes = factor(meses, levels = meses))%>%
+  select(mes,x,estacionalidad_ets)
+
+names(stacdef)[2]="descomposicion"
+
+
+mes_max <- stacdef$mes[which.max(stacdef$estacionalidad_ets)]
+
+mes_min <- stacdef$mes[which.min(stacdef$estacionalidad_ets)]
+
+# Graficar
+ggplot(stacdef, aes(x = mes, y = estacionalidad_ets, fill = mes)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = round(estacionalidad_ets, 4)), vjust = -0.5, size = 3.5) +
+  scale_fill_manual(values = ifelse(stacdef$mes == mes_max, "forestgreen",
+                                    ifelse(stacdef$mes == mes_min, "firebrick", "gray70"))) +
+  labs(
+    title = "Componentes estacionales del modelo ETS(M,M,M)",
+    subtitle = "Efecto multiplicativo mensual sobre la tasa de desempleo nacional",
+    x = "Mes",
+    y = "Efecto estacional",
+    caption = "Fuente: Elaboración propia con datos del BCE"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    plot.caption = element_text(size = 8, hjust = 1)
+  )
+
+
+
+
+
+```
+
+El modelo ETS es muy conservador en sus ajustes de nivel y tendencia (α y β muy bajos).
+
+La estacionalidad es suave pero presente, con algunos meses claramente más altos o bajos.
+
+El mes que presenta mayor peso en el modelo es s8 (julio)
+
+El mes que presenta la menor ponderación en el modelo es s10 (septiembre)
+
+El modelo está capturando patrones estables y cíclicos, indicando que los picos detectados no son necesariamente estructurales, sino parte del patrón cíclico, lo que se refleja en su buen desempeño en MAE y RMSE.
+
+# 7. Validación del modelo (ETS)
+
+## 7.1 Error absoluto medio (MAE)
+
+Mide la magnitud promedio de los errores de predicción, el objetivo del MAE es comunicar el **error promedio en unidades reales** (como puntos porcentuales en este caso).
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+residuos <- modelo_ets$residuals
+
+er<-(mean(abs(residuos)))
+
+cat("La media de los residuos de la tasa de desempleo es:", round(er, 4), "\n")
+
+
+```
+
+## 7.2 Error cuadrático medio (RMSE)
+
+Se calcula como la raíz cuadrada de la media de las diferencias al cuadrado entre las predicciones y los valores observados. Un RMSE bajo indica que el modelo se ajusta mejor a los datos, mientras que un RMSE alto significa que las predicciones son menos precisas.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+mse <- mean(residuos^2)
+rmse <- sqrt(mse)
+
+cat("RMSE:", round(rmse, 4), "\n")
+
+```
+
+## 7.3 Gráfico de los residuos del modelo
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+residuos <- modelo_ets$residuals
+media_res <- mean(residuos)
+sd_res <- sd(residuos)
+
+lim_sup <- media_res + 2 * sd_res
+lim_inf <- media_res - 2 * sd_res
+
+library(ggplot2)
+
+res_df <- data.frame(
+  Fecha = time(residuos),
+  Residuo = as.numeric(residuos)
+)
+
+ggplot(res_df, aes(x = Fecha, y = Residuo)) +
+  geom_line(color = "darkred", size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_hline(yintercept = lim_sup, linetype = "dotted", color = "blue") +
+  geom_hline(yintercept = lim_inf, linetype = "dotted", color = "blue") +
+  labs(
+    title = "Residuos del modelo ETS",
+    subtitle = "Con bandas de ±2 desviaciones estándar",
+    x = "Fecha",
+    y = "Error",
+    caption = "Fuente: Modelo ETS(M,M,M) aplicado a tasa de desempleo nacional"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    plot.caption = element_text(size = 8, hjust = 1)
+  )
+```
+
+El gráfico de residuos muestra que:
+
+Residuos centrados en cero: la mayoría de los errores se distribuyen alrededor de la línea base, lo que indica ausencia de sesgo sistemático en las proyecciones.
+
+Bandas de ±2σ: casi todos los residuos se mantienen dentro de las bandas de confianza. Solo se observa un pico aislado en 2023 que supera este umbral.
+
+Variabilidad moderada: no hay acumulación de picos ni patrones persistentes de desviación, lo que sugiere que el modelo captura adecuadamente la dinámica de la serie.
+
+El pico en 2023 debe interpretarse como un evento atípico puntual (anomalía), más que como una falla estructural del modelo. En series económicas es normal que existan valores extremos asociados a shocks coyunturales.
+
+La consistencia del resto de los residuos dentro de ±2σ confirma que el modelo mantiene un buen ajuste en la mayor parte del periodo.
+
+## 7.4 ACF de los residuos del modelo
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+acf(residuos)
+```
+
+El análisis del gráfico de autocorrelación (ACF) de los residuos muestra que el **lag 1 aparece significativo**, lo cual es esperable dado que refleja la correlación inmediata de la serie consigo misma y no constituye evidencia de falla del modelo. Asimismo, se observa cierta **significación en el lag 4**, pero este comportamiento no invalida el modelo ETS(M,M,M), ya que, a diferencia de los modelos ARIMA, el ETS no incorpora explícitamente rezagos autorregresivos en su estructura. En consecuencia, la presencia de correlaciones en algunos rezagos es compatible con la lógica del ETS, que se centra en **error, tendencia y estacionalidad multiplicativa**, más que en la parametrización de dependencias temporales. Por ello, la autocorrelación observada en el lag 4 debe interpretarse como una **señal débil** y no como evidencia de un problema estructural en el ajuste del modelo.
+
+## 7.5 Test de Box-Ljung
+
+Este test evalúa si los residuos del modelo presentan autocorrelación significativa, es decir, si hay patrones temporales no capturados por el modelo.
+
+-   H₀ (nula): Los residuos son ruido blanco (no hay autocorrelación).
+-   H₁ (alternativa): Los residuos presentan autocorrelación.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+Box.test(residuos, lag = 12, type = "Ljung")
+
+```
+
+El p-value es de 0.05317 el cual es mayor a 0.05, por lo tanto no se rechaza la hipótesis nula, el modelo ETS está capturando bien la estructura de la serie.
+
+## 7.6 Conclusiones de la validación del modelo
+
+**1. Residuos centrados en cero** La mayoría de los residuos oscilan alrededor de la línea base, lo que indica que el modelo no presenta sesgo sistemático: no tiende a sobrestimar ni subestimar de forma persistente.
+
+**2. Residuos dentro de las bandas ±2σ** Casi todos los puntos se encuentran dentro del rango esperado definido por ±2 desviaciones estándar. Se observa un único pico que supera este rango en 2023, coincidente con un evento atípico en el mercado laboral, lo que sugiere una anomalía puntual y no una falla estructural del modelo.
+
+**3. Variabilidad moderada** Aunque existen fluctuaciones, no se identifican picos extremos ni patrones persistentes. Esto indica que el modelo captura adecuadamente la dinámica de la serie sin dejar errores sistemáticos relevantes.
+
+**4. Autocorrelación débil en los residuos** El gráfico de ACF muestra que el lag 1 es significativo, lo cual es esperable porque refleja la correlación inmediata de la serie consigo misma. También se observa cierta significación en el lag 4, lo que sugiere una dependencia temporal débil. Sin embargo, el test de Box-Ljung arroja un p-value de 0.05317, lo que indica que no se rechaza la hipótesis nula de independencia de los residuos al nivel de significancia convencional (α = 0.05). En consecuencia, la autocorrelación detectada es leve y no compromete la validez del modelo ETS, que se centra en error, tendencia y estacionalidad multiplicativa, sin incorporar explícitamente rezagos autorregresivos como los modelos ARIMA.
+
+**5. Solidez del ajuste y validez para proyección** El modelo ETS(M,M,M) muestra un ajuste robusto: los residuos son centrados, independientes y dentro de un rango esperable. No hay evidencia de errores sistemáticos ni de autocorrelación fuerte, lo que valida su uso para proyecciones confiables.
+
+**6. Indicadores de precisión Los valores de MAE y RMSE** muestran diferencias promedio pequeñas entre los valores observados de la tasa nacional y sus respectivas proyecciones, lo que reafirma la calidad del ajuste.
+
+# 8. Proyección de la tasa de desempleo
+
+## 8.1 Gráfico de la tasa nacional de desempleo en conjunto con los valores proyectados y los intervalos de confianza
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+proyeccion <- forecast::forecast(modelo_ets, h = 6)
+
+autoplot(proyeccion) +
+  labs(
+    title = "Tasa de desempleo nacional y su respectiva proyección",
+    subtitle = "Modelo ETS(M,M,M) con bandas de confianza",
+    x = "Mes",
+    y = "Tasa de desempleo (%)",
+    caption = "Fuente: Proyección basada en datos del BCE"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    plot.caption = element_text(size = 8, hjust = 1)
+  )
+
+
+```
+
+En el gráfico se puede observar la serie histórica de la tasa nacional de desempleo y la proyección obtenida con sus respectivos intervalos de confianza al 80 y 95 % de confianza, como se puede apreciar la proyección sigue el mismo patrón de de la serie.
+
+## 8.2 Gráfico de los valores proyectados para 6 meses
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+proyeccion <- forecast(modelo_ets, h = 6)
+
+# Construir dataframe con fechas reales
+proy_df <- data.frame(
+  Fecha = as.Date(time(proyeccion$mean)),
+  Proyeccion = as.numeric(proyeccion$mean),
+  IC_80_inf = proyeccion$lower[,1],
+  IC_80_sup = proyeccion$upper[,1],
+  IC_95_inf = proyeccion$lower[,2],
+  IC_95_sup = proyeccion$upper[,2]
+)
+
+# Detectar extremos
+max_row <- proy_df[which.max(proy_df$Proyeccion), ]
+min_row <- proy_df[which.min(proy_df$Proyeccion), ]
+
+# Promedio proyectado
+promedio_proy <- mean(proy_df$Proyeccion)
+
+# Gráfico con anotaciones y bandas
+ggplot(proy_df, aes(x = Fecha, y = Proyeccion)) +
+  geom_line(color = "steelblue", size = 1.2) +
+  
+  # Bandas de confianza
+  geom_ribbon(aes(ymin = IC_95_inf, ymax = IC_95_sup), fill = "gray80", alpha = 0.5) +
+  geom_ribbon(aes(ymin = IC_80_inf, ymax = IC_80_sup), fill = "gray60", alpha = 0.5) +
+  
+  # Anotación máximo
+  geom_point(data = max_row, aes(x = Fecha, y = Proyeccion), color = "firebrick", size = 3) +
+  geom_text(data = max_row, aes(x = Fecha, y = Proyeccion,
+                                label = paste0("↑ Máx: ", round(Proyeccion,2), "%\n", format(Fecha, "%b %Y"))),
+            hjust = -0.1, vjust = -1.2, size = 3.2, color = "firebrick") +
+  
+  # Anotación mínimo
+  geom_point(data = min_row, aes(x = Fecha, y = Proyeccion), color = "darkgreen", size = 3) +
+  geom_text(data = min_row, aes(x = Fecha, y = Proyeccion,
+                                label = paste0("↓ Mín: ", round(Proyeccion,2), "%\n", format(Fecha, "%b %Y"))),
+            hjust = -0.1, vjust = 1.5, size = 3.2, color = "darkgreen") +
+  
+  # Línea de promedio
+  geom_hline(yintercept = promedio_proy, linetype = "dashed", color = "blue", size = 0.6) +
+  annotate("text", x = min(proy_df$Fecha), y = promedio_proy + 0.05,
+           label = paste0("Promedio proyectado: ", round(promedio_proy, 2), "%"),
+           color = "blue", hjust = 0, size = 3.2) +
+  
+  labs(
+    title = "Proyección de la tasa de desempleo nacional",
+    subtitle = "Modelo ETS(M,M,M) con fechas reales, bandas de confianza y anotaciones clave",
+    x = "Mes",
+    y = "Tasa de desempleo (%)",
+    caption = "Fuente: Proyección basada en datos del BCE"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    plot.caption = element_text(size = 8, hjust = 1)
+  )
+
+
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+proyeccion_df <- data.frame(
+  Fecha = as.Date(time(proyeccion$mean)),
+  Proyeccion = round(as.numeric(proyeccion$mean), 2),
+  IC_80_inf = round(proyeccion$lower[,1], 2),
+  IC_80_sup = round(proyeccion$upper[,1], 2),
+  IC_95_inf = round(proyeccion$lower[,2], 2),
+  IC_95_sup = round(proyeccion$upper[,2], 2)
+)
+
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+kable(proyeccion_df,format = "pipe", padding = 2,booktabs = TRUE,align = "c")
+
+```
+
+En esta sección se detalla los valores proyectados para el período octubre 2025 a marzo 2026 con sus respectivos intervalos al 80 y 95% de confianza.
+
+El valor máximo proyectado corresponde a febrero de 2026, con una tasa de 3,82%, mientras que el mínimo se registra en diciembre de 2025, con 2,97%. La media del periodo proyectado se sitúa en 3,49%, con una desviación estándar de 0,30%, lo que refleja una variabilidad moderada en las estimaciones. Asimismo, se observa que las proyecciones se mantienen por debajo de los máximos y promedios históricos, siempre que las condiciones económicas permanezcan estables y no se introduzcan medidas de política gubernamental que puedan alterar la dinámica del mercado laboral. En caso de que se implementen nuevas políticas, el comportamiento de la serie y sus proyecciones podría modificarse significativamente.
